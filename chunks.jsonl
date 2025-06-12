@@ -1,0 +1,4 @@
+{"text": "You must use gpt-3.5-turbo-0125 even if AI Proxy supports gpt-4o-mini. Use OpenAI API directly.", "id": "post1", "source": "t/ga5-question-8-clarification/155939/4"}
+{"text": "Use the tokenizer to get the number of tokens and multiply by the given rate.", "id": "post2", "source": "t/ga5-question-8-clarification/155939/3"}
+{"text": "Refer to Prof. Anand’s lecture on model selection. It discusses OpenAI models.", "id": "post3", "source": "lecture-notes/week5"}
+{"text": "Always follow the exact model mentioned in the question if explicitly specified.", "id": "post4", "source": "discourse-summary"}
