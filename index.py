@@ -1,17 +1,19 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, File, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Optional
-import base64, io, json
 import pytesseract
 from PIL import Image
-from sentence_transformers import SentenceTransformer
+import io
+import base64
+import json
 import faiss
 import numpy as np
-import os
+from sentence_transformers import SentenceTransformer
 
 app = FastAPI()
 
+# ✅ CORS middleware added for external access (like TDS, Hoppscotch, etc.)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,43 +22,52 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class Query(BaseModel):
+# Load data
+with open("chunks.jsonl", "r", encoding="utf-8") as f:
+    chunks = [json.loads(line) for line in f]
+
+# Load FAISS index and embedding model
+index = faiss.read_index("index.faiss")
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
+class QueryRequest(BaseModel):
     question: str
-    image: Optional[str] = None
+    image: str = None
 
-@app.post("/")
-async def get_answer(query: Query):
-    # Load files inside the function to reduce cold-start memory
-    chunks_path = os.path.join(os.path.dirname(__file__), "chunks.jsonl")
-    index_path = os.path.join(os.path.dirname(__file__), "index.faiss")
+def extract_text_from_image(base64_image: str) -> str:
+    image_data = base64.b64decode(base64_image)
+    image = Image.open(io.BytesIO(image_data))
+    text = pytesseract.image_to_string(image)
+    return text
 
-    with open(chunks_path, "r", encoding="utf-8") as f:
-        chunks = [json.loads(line) for line in f]
+def search_similar_chunks(question: str, k: int = 3):
+    embedding = model.encode([question])
+    distances, indices = index.search(np.array(embedding).astype("float32"), k)
+    results = [chunks[i] for i in indices[0]]
+    return results
 
-    texts = [chunk["text"] for chunk in chunks]
-    sources = [chunk.get("source", "") for chunk in chunks]
-    ids = [chunk.get("id", "") for chunk in chunks]
+@app.post("/api")
+async def answer_query(req: QueryRequest):
+    full_question = req.question
+    if req.image:
+        try:
+            image_text = extract_text_from_image(req.image)
+            full_question += " " + image_text
+        except Exception:
+            pass  # If image decoding fails, ignore it
 
-    model = SentenceTransformer("all-MiniLM-L6-v2")
-    index = faiss.read_index(index_path)
+    top_chunks = search_similar_chunks(full_question)
+    answer = top_chunks[0]["text"] if top_chunks else "Sorry, I couldn't find a good answer."
 
-    question = query.question
-    if query.image:
-        image_data = base64.b64decode(query.image)
-        image = Image.open(io.BytesIO(image_data))
-        extracted_text = pytesseract.image_to_string(image)
-        question += " " + extracted_text.strip()
+    links = []
+    for chunk in top_chunks:
+        if "url" in chunk:
+            links.append({
+                "url": chunk["url"],
+                "text": chunk.get("source", "View Source")
+            })
 
-    embedding = model.encode([question]).astype("float32")
-    _, I = index.search(embedding, 3)
-
-    selected = [texts[i] for i in I[0]]
-    selected_sources = [sources[i] for i in I[0]]
-
-    return {
-        "answer": selected[0],
-        "links": [
-            {"url": f"https://discourse.onlinedegree.iitm.ac.in/{source}", "text": f"{selected[i]}"}
-            for i, source in enumerate(selected_sources)
-        ]
-    }
+    return JSONResponse({
+        "answer": answer,
+        "links": links
+    })
